@@ -330,6 +330,31 @@ class QQAdminPlugin(Star):
     async def ai_set_card(self, event: AiocqhttpMessageEvent):
         await self.llm.ai_set_card(event)
 
+    @filter.llm_tool()
+    async def llm_set_group_ban(
+        self, event: AiocqhttpMessageEvent, user_id: str, duration: int, user_name: str
+    ):
+        """
+        在群聊中禁言某用户。被禁言的用户在禁言期间将无法发送消息。
+        Args:
+            user_id(string): 要禁言的用户的QQ账号，必定为一串数字，如(12345678)
+            user_name(string): 要禁言的用户的QQ昵称，如(小明)
+            duration(number): 禁言持续时间（以秒为单位），范围为0~86400。设置为 0 即解除禁言
+        """
+        try:
+            await event.bot.set_group_ban(
+                group_id=int(event.get_group_id()),
+                user_id=int(user_id),
+                duration=duration,
+            )
+            logger.info(
+                f"用户：{user_id}在群聊中被：{event.get_sender_name()}执行禁言{duration}秒"
+            )
+            event.stop_event()
+        except Exception as e:
+            logger.error(f"禁言用户 {user_id} 失败: {e}")
+
+
     @filter.command("群管帮助")
     async def qq_admin_help(self, event: AiocqhttpMessageEvent):
         """查看群管帮助"""
