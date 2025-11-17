@@ -332,7 +332,7 @@ class QQAdminPlugin(Star):
 
     @filter.llm_tool()
     async def llm_set_group_ban(
-        self, event: AiocqhttpMessageEvent, user_id: str, duration: int, user_name: str
+        self, event: AiocqhttpMessageEvent, user_id: str, duration: int
     ):
         """
         在群聊中禁言某用户。被禁言的用户在禁言期间将无法发送消息。
