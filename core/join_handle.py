@@ -15,9 +15,10 @@ from ..utils import get_reply_message_str
 
 
 class GroupJoinData:
-    def __init__(self,path: str = "group_join_data.json"):
+    def __init__(self, path: str = "group_join_data.json"):
         self.path = path
         self.accept_keywords: dict[str, list[str]] = {}
+        self.reject_keywords: dict[str, list[str]] = {}
         self.reject_ids: dict[str, list[str]] = {}
         self._load()
 
@@ -29,6 +30,7 @@ class GroupJoinData:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
             self.accept_keywords = data.get("accept_keywords", {})
+            self.reject_keywords = data.get("reject_keywords", {})
             self.reject_ids = data.get("reject_ids", {})
         except Exception as e:
             print(f"加载 group_join_data 失败: {e}")
@@ -37,6 +39,7 @@ class GroupJoinData:
     def _save(self):
         data = {
             "accept_keywords": self.accept_keywords,
+            "reject_keywords": self.reject_keywords,
             "reject_ids": self.reject_ids,
         }
         with open(self.path, "w", encoding="utf-8") as f:
@@ -50,12 +53,48 @@ class GroupJoinData:
 class GroupJoinManager:
     def __init__(self, json_path: str):
         self.data = GroupJoinData(json_path)
+        self.auto_reject_without_keyword: bool = False
 
-    def should_reject(self, group_id: str, user_id: str) -> bool:
-        return (
+    def reject_reason(
+        self, group_id: str, user_id: str, comment: str | None = None
+    ) -> str | None:
+        """返回拒绝原因标识：
+        黑名单用户: 在用户ID黑名单中
+        命中黑名单关键词: 触发黑名单关键词
+        未包含进群关键词: 已配置自动同意关键词但未命中且开启自动拒绝
+        None: 不拒绝
+        """
+        # 1. 用户ID黑名单
+        if (
             group_id in self.data.reject_ids
             and user_id in self.data.reject_ids[group_id]
-        )
+        ):
+            return "黑名单用户"
+
+        if comment:
+            lower_comment = comment.lower()
+            # 2. 黑名单关键词
+            if group_id in self.data.reject_keywords and any(
+                rk.lower() in lower_comment for rk in self.data.reject_keywords[group_id]
+            ):
+                return "命中黑名单关键词"
+            # 3. 未包含任何自动同意关键词（需开启开关 & 已设置白名单关键词）
+            if (
+                self.auto_reject_without_keyword
+                and group_id in self.data.accept_keywords
+                and self.data.accept_keywords[group_id]
+                and not any(
+                    ak.lower() in lower_comment
+                    for ak in self.data.accept_keywords[group_id]
+                )
+            ):
+                return "未包含进群关键词"
+        return None
+
+    def should_reject(
+        self, group_id: str, user_id: str, comment: str | None = None
+    ) -> bool:
+        return self.reject_reason(group_id, user_id, comment) is not None
 
     def should_approve(self, group_id: str, comment: str) -> bool:
         if group_id not in self.data.accept_keywords:
@@ -80,6 +119,23 @@ class GroupJoinManager:
 
     def get_keywords(self, group_id: str) -> list[str]:
         return self.data.accept_keywords.get(group_id, [])
+
+    def add_reject_keyword(self, group_id: str, keywords: list[str]):
+        self.data.reject_keywords.setdefault(group_id, []).extend(keywords)
+        self.data.reject_keywords[group_id] = list(
+            set(self.data.reject_keywords[group_id])
+        )
+        self.data.save()
+
+    def remove_reject_keyword(self, group_id: str, keywords: list[str]):
+        if group_id in self.data.reject_keywords:
+            for k in keywords:
+                if k in self.data.reject_keywords[group_id]:
+                    self.data.reject_keywords[group_id].remove(k)
+            self.data.save()
+
+    def get_reject_keywords(self, group_id: str) -> list[str]:
+        return self.data.reject_keywords.get(group_id, [])
 
     def add_reject_id(self, group_id: str, ids: list[str]):
         self.data.reject_ids.setdefault(group_id, []).extend(ids)
@@ -107,6 +163,9 @@ class JoinHandle:
         self.admins_id: list[str] = admins_id
         self.group_join_manager = GroupJoinManager(
             str(data_dir / "group_join_data.json")
+        )
+        self.group_join_manager.auto_reject_without_keyword = bool(
+            config.get("reject_without_keyword", False)
         )
 
     async def _send_admin(self, client: CQHttp, message: str):
@@ -143,6 +202,30 @@ class JoinHandle:
             await event.send(event.plain_result("本群没有设置进群关键词"))
             return
         await event.send(event.plain_result(f"本群的进群关键词：{keywords}"))
+
+    async def add_reject_keywords(self, event: AiocqhttpMessageEvent):
+        """添加进群黑名单关键词（命中即拒绝）"""
+        if keywords := event.message_str.removeprefix("添加进群黑词").strip().split():
+            self.group_join_manager.add_reject_keyword(event.get_group_id(), keywords)
+            await event.send(event.plain_result(f"新增进群黑名单关键词：{keywords}"))
+        else:
+            await event.send(event.plain_result("未输入任何关键词"))
+
+    async def remove_reject_keywords(self, event: AiocqhttpMessageEvent):
+        """删除进群黑名单关键词"""
+        if keywords := event.message_str.removeprefix("删除进群黑词").strip().split():
+            self.group_join_manager.remove_reject_keyword(event.get_group_id(), keywords)
+            await event.send(event.plain_result(f"已删进群黑名单关键词：{keywords}"))
+        else:
+            await event.send(event.plain_result("未指定要删除的关键词"))
+
+    async def view_reject_keywords(self, event: AiocqhttpMessageEvent):
+        """查看进群黑名单关键词"""
+        keywords = self.group_join_manager.get_reject_keywords(event.get_group_id())
+        if not keywords:
+            await event.send(event.plain_result("本群没有设置进群黑名单关键词"))
+            return
+        await event.send(event.plain_result(f"本群的进群黑名单关键词：{keywords}"))
 
     async def add_reject_ids(self, event: AiocqhttpMessageEvent):
         """添加指定ID到进群黑名单"""
@@ -215,11 +298,14 @@ class JoinHandle:
             else:
                 await event.send(event.plain_result(reply))
 
-            if self.group_join_manager.should_reject(str(group_id), str(user_id)):
+            reason = self.group_join_manager.reject_reason(
+                str(group_id), str(user_id), comment
+            )
+            if reason:
                 await client.set_group_add_request(
-                    flag=flag, sub_type="add", approve=False, reason="黑名单用户"
+                    flag=flag, sub_type="add", approve=False, reason=reason,
                 )
-                await event.send(event.plain_result("黑名单用户，已自动拒绝进群"))
+                await event.send(event.plain_result(f"{reason}，已自动拒绝进群"))
             elif comment and self.group_join_manager.should_approve(
                 str(group_id), comment
             ):

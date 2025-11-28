@@ -18,6 +18,19 @@
     "type": "list",
     "default": []
   },
+  "reject_keywords_list": {
+    "description": "进群黑名单关键词数据",
+    "hint": "当用户进群时，会检查其消息是否包含黑名单关键词，若包含则会自动拒绝进群申请",
+    "invisible": true,
+    "type": "list",
+    "default": []
+  },
+  "reject_without_keyword": {
+    "description": "未命中自动同意关键词自动拒绝",
+    "hint": "当已配置进群关键词且申请备注不包含任何一个关键词时，自动拒绝进群申请",
+    "type": "bool",
+    "default": false
+  },
   "enable_black": {
     "description": "启用主动退群通知",
     "hint": "当用户主动退群时，向群内通报",
@@ -474,6 +487,42 @@
       },
       "view_accept_keywords": {
         "description": "查看进群关键词",
+        "type": "string",
+        "options": [
+          "超管",
+          "群主",
+          "管理员",
+          "高等级成员",
+          "成员"
+        ],
+        "default": "成员"
+      },
+      "add_reject_keywords": {
+        "description": "添加进群黑词",
+        "type": "string",
+        "options": [
+          "超管",
+          "群主",
+          "管理员",
+          "高等级成员",
+          "成员"
+        ],
+        "default": "管理员"
+      },
+      "remove_reject_keywords": {
+        "description": "删除进群黑词",
+        "type": "string",
+        "options": [
+          "超管",
+          "群主",
+          "管理员",
+          "高等级成员",
+          "成员"
+        ],
+        "default": "管理员"
+      },
+      "view_reject_keywords": {
+        "description": "查看进群黑词",
         "type": "string",
         "options": [
           "超管",

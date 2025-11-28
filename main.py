@@ -251,6 +251,21 @@ class QQAdminPlugin(Star):
     async def view_accept_keywords(self, event: AiocqhttpMessageEvent):
         await self.join.view_accept_keywords(event)
 
+    @filter.command("添加进群黑词", desc="添加进群黑名单关键词（命中即拒绝）")
+    @perm_required(PermLevel.ADMIN)
+    async def add_reject_keywords(self, event: AiocqhttpMessageEvent):
+        await self.join.add_reject_keywords(event)
+
+    @filter.command("删除进群黑词", desc="删除进群黑名单关键词")
+    @perm_required(PermLevel.ADMIN)
+    async def remove_reject_keywords(self, event: AiocqhttpMessageEvent):
+        await self.join.remove_reject_keywords(event)
+
+    @filter.command("进群黑词", desc="查看进群黑名单关键词", alias={"查看进群黑词"})
+    @perm_required(PermLevel.ADMIN)
+    async def view_reject_keywords(self, event: AiocqhttpMessageEvent):
+        await self.join.view_reject_keywords(event)
+
     @filter.command("添加进群黑名单", desc="添加指定ID到进群黑名单")
     async def add_reject_ids(self, event: AiocqhttpMessageEvent):
         """添加指定ID到进群黑名单"""
