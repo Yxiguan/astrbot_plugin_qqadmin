@@ -261,7 +261,7 @@ class QQAdminPlugin(Star):
     async def remove_reject_keywords(self, event: AiocqhttpMessageEvent):
         await self.join.remove_reject_keywords(event)
 
-    @filter.command("进群黑词", desc="查看进群黑名单关键词", alias={"查看进群黑词"})
+    @filter.command("查看进群黑词", desc="查看进群黑名单关键词", alias={"进群黑词"})
     @perm_required(PermLevel.ADMIN)
     async def view_reject_keywords(self, event: AiocqhttpMessageEvent):
         await self.join.view_reject_keywords(event)
