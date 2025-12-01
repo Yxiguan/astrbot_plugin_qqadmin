@@ -17,6 +17,7 @@ from ..utils import get_reply_message_str
 class GroupJoinData:
     def __init__(self, path: str = "group_join_data.json"):
         self.path = path
+        self.join_review_enabled: dict[str, bool] = {}
         self.accept_keywords: dict[str, list[str]] = {}
         self.reject_keywords: dict[str, list[str]] = {}
         self.reject_ids: dict[str, list[str]] = {}
@@ -32,6 +33,7 @@ class GroupJoinData:
         try:
             with open(self.path, encoding="utf-8") as f:
                 data = json.load(f)
+            self.join_review_enabled = data.get("join_review_enabled", {})
             self.accept_keywords = data.get("accept_keywords", {})
             self.reject_keywords = data.get("reject_keywords", {})
             self.reject_ids = data.get("reject_ids", {})
@@ -44,6 +46,7 @@ class GroupJoinData:
 
     def _save(self):
         data = {
+            "join_review_enabled": self.join_review_enabled,
             "accept_keywords": self.accept_keywords,
             "reject_keywords": self.reject_keywords,
             "reject_ids": self.reject_ids,
@@ -62,6 +65,7 @@ class GroupJoinData:
 class GroupJoinManager:
     def __init__(self, json_path: str):
         self.data = GroupJoinData(json_path)
+        self.join_review_enabled: bool = False
         self.reject_below_level: int = 0
         self.auto_reject_without_keyword: bool = False
         self.auto_blacklist_on_reject_keyword: bool = False
@@ -178,6 +182,25 @@ class GroupJoinManager:
         self.data.reject_ids.setdefault(group_id, []).append(user_id)
         self.data.save()
 
+    def set_join_review_enabled(self, group_id: str, enabled: bool | None) -> None:
+        """设置群的进群审核开关，None 表示删除群配置（使用全局配置）"""
+        if enabled is None:
+            self.data.join_review_enabled.pop(group_id, None)
+        else:
+            self.data.join_review_enabled[group_id] = enabled
+        self.data.save()
+
+    def get_join_review_enabled(self, group_id: str) -> bool | None:
+        """获取群的进群审核开关，返回 None 表示未设置（使用全局配置）"""
+        return self.data.join_review_enabled.get(group_id)
+
+    def is_join_review_enabled(self, group_id: str) -> bool:
+        """判断是否启用进群审核（优先使用群配置，否则使用全局配置）"""
+        group_setting = self.data.join_review_enabled.get(group_id)
+        if group_setting is not None:
+            return group_setting
+        return self.join_review_enabled
+
     def set_level_threshold(self, group_id: str, level: int) -> None:
         """设置群的进群等级门槛"""
         if level <= 0:
@@ -236,6 +259,9 @@ class JoinHandle:
         self.admins_id: list[str] = admins_id
         self.group_join_manager = GroupJoinManager(
             str(data_dir / "group_join_data.json")
+        )
+        self.group_join_manager.join_review_enabled = bool(
+            config.get("enable_audit", False)
         )
         self.group_join_manager.reject_below_level = int(
             config.get("reject_below_level", 0)
@@ -444,6 +470,42 @@ class JoinHandle:
             status = "开启" if global_setting else "关闭"
             await event.send(event.plain_result(f"本群命中黑词自动拉黑：{status}（全局配置）"))
 
+    async def set_join_review(self, event: AiocqhttpMessageEvent):
+        """设置本群进群审核开关"""
+        parts = event.message_str.strip().split()
+        if len(parts) < 2:
+            await event.send(event.plain_result("请提供参数：开/关/清除"))
+            return
+        arg = parts[1]
+        group_id = event.get_group_id()
+
+        if arg in ("开", "开启", "on", "true", "1"):
+            self.group_join_manager.set_join_review_enabled(group_id, True)
+            await event.send(event.plain_result("已开启本群进群审核"))
+        elif arg in ("关", "关闭", "off", "false", "0"):
+            self.group_join_manager.set_join_review_enabled(group_id, False)
+            await event.send(event.plain_result("已关闭本群进群审核"))
+        elif arg in ("清除", "删除", "默认", "default", "clear"):
+            self.group_join_manager.set_join_review_enabled(group_id, None)
+            global_setting = self.group_join_manager.join_review_enabled
+            status = "开启" if global_setting else "关闭"
+            await event.send(event.plain_result(f"已清除本群配置，将使用全局配置（{status}）"))
+        else:
+            await event.send(event.plain_result("请提供参数：开/关/清除"))
+
+    async def view_join_review(self, event: AiocqhttpMessageEvent):
+        """查看本群进群审核开关状态"""
+        group_id = event.get_group_id()
+        group_setting = self.group_join_manager.get_join_review_enabled(group_id)
+        global_setting = self.group_join_manager.join_review_enabled
+
+        if group_setting is not None:
+            status = "开启" if group_setting else "关闭"
+            await event.send(event.plain_result(f"本群进群审核：{status}（群独立配置）"))
+        else:
+            status = "开启" if global_setting else "关闭"
+            await event.send(event.plain_result(f"本群进群审核：{status}（全局配置）"))
+
     async def agree_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
         """批准进群申请"""
         reply = await self.approve(event=event, extra=extra, approve=True)
@@ -468,7 +530,7 @@ class JoinHandle:
         user_id: int = raw.get("user_id", 0)
         # 进群申请事件
         if (
-            self.conf["enable_audit"]
+            self.group_join_manager.is_join_review_enabled(str(group_id))
             and raw.get("post_type") == "request"
             and raw.get("request_type") == "group"
             and raw.get("sub_type") == "add"
