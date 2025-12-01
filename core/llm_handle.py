@@ -39,17 +39,17 @@ class LLMHandle:
         return contexts
 
     async def get_msg_contexts(
-        self, event: AiocqhttpMessageEvent, target_id: str
+        self, event: AiocqhttpMessageEvent, target_id: str, query_rounds: int = 10
     ) -> list[dict]:
         """持续获取群聊历史消息直到达到要求"""
         group_id = event.get_group_id()
         message_seq = 0
         contexts: list[dict] = []
-        for _ in range(self.conf["query"]["query_rounds"]):
+        for _ in range(query_rounds):
             payloads = {
                 "group_id": group_id,
                 "message_seq": message_seq,
-                "count": self.conf["query"]["query_counts"],
+                "count": 200,
                 "reverseOrder": True,
             }
             result: dict = await event.bot.api.call_action(
@@ -86,11 +86,13 @@ class LLMHandle:
         """让AI设置群友的群名片"""
         at_ids = get_ats(event)
         target_id = at_ids[0] if at_ids else event.get_sender_id()
+        end_arg = event.message_str.split()[-1]
+        query_rounds = int(end_arg) if end_arg.isdigit() else 10
         raw_card = await get_nickname(event, target_id)
 
         logger.info(f"正在根据{raw_card}（{target_id}）的聊天记录生成新昵称...")
 
-        contexts = await self.get_msg_contexts(event, target_id)
+        contexts = await self.get_msg_contexts(event, target_id, query_rounds)
         if not contexts:
             await event.send(event.plain_result("聊天记录为空"))
             return

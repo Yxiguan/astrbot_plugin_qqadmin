@@ -1,91 +1,70 @@
 {
-  "enable_audit": {
-    "description": "启用进群审核",
-    "hint": "当用户申请进群时，如果设置了进群关键词bot则会自动审核，没设置也会通知管理员",
-    "type": "bool",
-    "default": true
-  },
-  "admin_audit": {
-    "description": "进群事件仅通知bot管理员",
-    "hint": "如果开启，则进群事件仅通知bot管理员，不再将通知发送在对应群聊",
-    "type": "bool",
-    "default": false
-  },
-  "accept_keywords_list": {
-    "description": "进群关键词数据",
-    "hint": "当用户进群时，会检查其消息是否包含关键词，若包含则会自动批准进群",
-    "invisible": true,
-    "type": "list",
-    "default": []
-  },
-  "reject_keywords_list": {
-    "description": "进群黑名单关键词数据",
-    "hint": "当用户进群时，会检查其消息是否包含黑名单关键词，若包含则会自动拒绝进群申请",
-    "invisible": true,
-    "type": "list",
-    "default": []
-  },
-  "reject_below_level": {
-    "description": "进群等级门槛",
-    "hint": "当申请人的QQ等级低于此值时，自动拒绝进群申请。设为0表示不启用此功能。可通过群内命令为单个群设置独立配置",
-    "type": "int",
-    "default": 0
-  },
-  "auto_reject_without_keyword": {
-    "description": "未命中关键词自动拒绝",
-    "hint": "当已配置进群关键词且申请备注不包含任何一个关键词时，自动拒绝进群申请。可通过群内命令为单个群设置独立配置",
-    "type": "bool",
-    "default": false
-  },
-  "auto_blacklist_on_reject_keyword": {
-    "description": "命中黑词自动拉黑",
-    "hint": "当进群申请因命中黑名单关键词被拒绝时，自动将该用户加入进群黑名单。可通过群内命令为单个群设置独立配置",
-    "type": "bool",
-    "default": false
-  },
-  "enable_black": {
-    "description": "启用主动退群通知",
-    "hint": "当用户主动退群时，向群内通报",
-    "type": "bool",
-    "default": true
-  },
-  "auto_black": {
-    "description": "主动退群自动拉黑",
-    "hint": "当用户主动退群时，是否自动拉黑（即添加到拒绝列表）",
-    "type": "bool",
-    "default": false
-  },
-  "reject_ids_list": {
-    "description": "拉黑列表",
-    "hint": "主动退群者将会被拉黑（即被添加到此列表）",
-    "invisible": true,
-    "type": "list",
-    "default": []
+  "join_config": {
+    "description": "进群退群模块配置",
+    "hint": "",
+    "type": "object",
+    "items": {
+      "default_switch": {
+        "description": "默认是否启用进群审核",
+        "hint": "开启后，进群退群模块的功能才会在当前群聊生效，群主、群管理可用命令 “进群审核 开/关” 为当前群聊设置",
+        "type": "bool",
+        "default": false
+      },
+      "default_min_level": {
+        "description": "默认进群等级门槛",
+        "hint": "当申请人的QQ等级低于此值时，自动拒绝进群申请。设为0表示不启用此功能。可通过群内命令为当前群聊设置",
+        "type": "int",
+        "default": 0
+      },
+      "default_max_time": {
+        "description": "默认进群最大尝试次数",
+        "hint": "当用户申请进行的次数超过此值时，自动拒绝进群申请。可通过群内命令为当前群聊设置",
+        "type": "bool",
+        "default": 3
+      },
+      "no_match_reject": {
+        "description": "未命中白词时自动驳回",
+        "hint": "当用户申请加群时，没命中进群关键词，则自动驳回申请，而不是交给管理员处理",
+        "type": "bool",
+        "default": false
+      },
+      "admin_audit": {
+        "description": "进群事件仅通知bot管理员",
+        "hint": "如果开启，则进群事件仅通知bot管理员，不再将通知发送在对应群聊",
+        "type": "bool",
+        "default": false
+      },
+      "ban_time": {
+        "description": "进群禁言时长",
+        "hint": "单位为秒，新成员进群时，自动禁言该成员",
+        "type": "int",
+        "default": 0
+      },
+      "welcome_template": {
+        "description": "进群欢迎词",
+        "hint": "发给新群友的欢迎词, 支持变量: {nickname}, 示例：欢迎{nickname}加入群聊",
+        "type": "string",
+        "default": ""
+      },
+      "leave_notify": {
+        "description": "启用主动退群通知",
+        "hint": "当用户主动退群时，向群内通报",
+        "type": "bool",
+        "default": false
+      },
+      "leave_block": {
+        "description": "主动退群自动拉黑",
+        "hint": "当用户主动退群时，自动拉黑（即添加到进群黑名单）",
+        "type": "bool",
+        "default": false
+      }
+    }
   },
   "random_ban_time": {
     "description": "随机禁言配置",
     "hint": "若禁言命令未指定禁言时长，则使用随机时长，时长范围如下，单位为秒，用~表示范围",
     "type": "string",
     "default": "30~300"
-  },
-  "increase": {
-    "description": "进群配置",
-    "hint": "若禁言命令未指定禁言时长，则使用随机时长，时长范围如下",
-    "type": "object",
-    "items": {
-      "ban_time": {
-        "description": "进群禁言时长",
-        "hint": "单位为秒，新成员进群时，bot会自动禁言该成员，并提醒新成员看群公告",
-        "type": "int",
-        "default": 0
-      },
-      "welcome": {
-        "description": "进群欢迎词",
-        "hint": "发给新群友的欢迎词",
-        "type": "string",
-        "default": ""
-      }
-    }
   },
   "forbidden": {
     "description": "违禁词禁言配置",
@@ -306,7 +285,7 @@
         "default": "管理员"
       },
       "set_group_admin": {
-        "description": "设置管理员",
+        "description": "上管",
         "type": "string",
         "options": [
           "超管",
@@ -318,7 +297,7 @@
         "default": "群主"
       },
       "cancel_group_admin": {
-        "description": "取消管理员",
+        "description": "下管",
         "type": "string",
         "options": [
           "超管",
@@ -473,8 +452,8 @@
         ],
         "default": "管理员"
       },
-      "add_accept_keyword": {
-        "description": "添加进群关键词",
+      "handle_join_review": {
+        "description": "进群审核",
         "type": "string",
         "options": [
           "超管",
@@ -485,8 +464,8 @@
         ],
         "default": "管理员"
       },
-      "remove_accept_keyword": {
-        "description": "删除进群关键词",
+      "handle_accept_keyword": {
+        "description": "进群白词",
         "type": "string",
         "options": [
           "超管",
@@ -497,20 +476,8 @@
         ],
         "default": "管理员"
       },
-      "view_accept_keywords": {
-        "description": "查看进群关键词",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "成员"
-      },
-      "add_reject_keywords": {
-        "description": "添加进群黑词",
+      "handle_reject_keywords": {
+        "description": "进群黑词",
         "type": "string",
         "options": [
           "超管",
@@ -521,8 +488,8 @@
         ],
         "default": "管理员"
       },
-      "remove_reject_keywords": {
-        "description": "删除进群黑词",
+      "handle_level_threshold": {
+        "description": "进群等级",
         "type": "string",
         "options": [
           "超管",
@@ -533,20 +500,8 @@
         ],
         "default": "管理员"
       },
-      "view_reject_keywords": {
-        "description": "查看进群黑词",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "成员"
-      },
-      "add_reject_ids": {
-        "description": "添加进群黑名单",
+      "handle_join_time": {
+        "description": "进群次数",
         "type": "string",
         "options": [
           "超管",
@@ -557,92 +512,8 @@
         ],
         "default": "管理员"
       },
-      "remove_reject_ids": {
-        "description": "删除进群黑名单",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "管理员"
-      },
-      "view_reject_ids": {
-        "description": "查看进群黑名单",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "成员"
-      },
-      "set_level_threshold": {
-        "description": "设置进群等级",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "管理员"
-      },
-      "view_level_threshold": {
-        "description": "查看进群等级",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "成员"
-      },
-      "set_auto_reject_without_keyword": {
-        "description": "设置无词拒绝",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "管理员"
-      },
-      "view_auto_reject_without_keyword": {
-        "description": "查看无词拒绝",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "成员"
-      },
-      "set_auto_blacklist_on_reject_keyword": {
-        "description": "设置黑词拉黑",
-        "type": "string",
-        "options": [
-          "超管",
-          "群主",
-          "管理员",
-          "高等级成员",
-          "成员"
-        ],
-        "default": "管理员"
-      },
-      "view_auto_blacklist_on_reject_keyword": {
-        "description": "查看黑词拉黑",
+      "handle_reject_ids": {
+        "description": "进群黑名单",
         "type": "string",
         "options": [
           "超管",

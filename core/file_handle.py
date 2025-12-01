@@ -2,7 +2,6 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 from astrbot.core.message.components import File, Image, Reply, Video
@@ -12,13 +11,9 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 from ..utils import download_file
 
-if TYPE_CHECKING:
-    from ..main import QQAdminPlugin
-
 
 class FileHandle:
-    def __init__(self, plugin: "QQAdminPlugin", data_dir: Path):
-        self.plugin = plugin
+    def __init__(self, data_dir: Path):
         self.data_dir = data_dir
 
     async def _parse_path(
@@ -121,7 +116,7 @@ class FileHandle:
 
         return "\n".join(info), mapping
 
-    def _format_file_info(self, file: dict[str, Any]) -> str:
+    def _format_file_info(self, file: dict) -> str:
         """格式化文件信息"""
         lines = [f"【📄 {file.get('file_name', '未知')}】"]
         size = int(file.get("size", "0"))

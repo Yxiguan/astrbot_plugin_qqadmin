@@ -1,6 +1,4 @@
-
 import json
-import os
 from pathlib import Path
 
 from aiocqhttp import CQHttp
@@ -11,271 +9,120 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
-from ..utils import get_reply_message_str
+from ..utils import get_nickname, get_reply_message_str
 
 
 class GroupJoinData:
-    def __init__(self, path: str = "group_join_data.json"):
+    def __init__(self, path: Path, config: dict):
         self.path = path
-        self.join_review_enabled: dict[str, bool] = {}
-        self.accept_keywords: dict[str, list[str]] = {}
-        self.reject_keywords: dict[str, list[str]] = {}
-        self.reject_ids: dict[str, list[str]] = {}
-        self.reject_below_level: dict[str, int] = {}
-        self.auto_reject_without_keyword: dict[str, bool] = {}
-        self.auto_blacklist_on_reject_keyword: dict[str, bool] = {}
+        # 总数据
+        self._cfg: dict[str, dict] = {}
         self._load()
+        # 默认配置
+        self.default_cfg = {
+            "switch": config["default_switch"],
+            "accept_keywords": [],
+            "reject_keywords": [],
+            "min_level": config["default_min_level"],
+            "max_time": config["default_max_time"],
+            "block_ids": [],
+        }
 
+    # ---------- 私有工具 ----------
     def _load(self):
-        if not os.path.exists(self.path):
-            self._save()
+        if not self.path.exists():
+            self.save()
             return
         try:
-            with open(self.path, encoding="utf-8") as f:
-                data = json.load(f)
-            self.join_review_enabled = data.get("join_review_enabled", {})
-            self.accept_keywords = data.get("accept_keywords", {})
-            self.reject_keywords = data.get("reject_keywords", {})
-            self.reject_ids = data.get("reject_ids", {})
-            self.reject_below_level = data.get("reject_below_level", {})
-            self.auto_reject_without_keyword = data.get("auto_reject_without_keyword", {})
-            self.auto_blacklist_on_reject_keyword = data.get("auto_blacklist_on_reject_keyword", {})
+            with self.path.open(encoding="utf-8") as f:
+                self._cfg = json.load(f)
         except Exception as e:
-            print(f"加载 group_join_data 失败: {e}")
-            self._save()
-
-    def _save(self):
-        data = {
-            "join_review_enabled": self.join_review_enabled,
-            "accept_keywords": self.accept_keywords,
-            "reject_keywords": self.reject_keywords,
-            "reject_ids": self.reject_ids,
-            "reject_below_level": self.reject_below_level,
-            "auto_reject_without_keyword": self.auto_reject_without_keyword,
-            "auto_blacklist_on_reject_keyword": self.auto_blacklist_on_reject_keyword,
-        }
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.error(f"加载失败: {e}")
+            self.save()
 
     def save(self):
-        self._save()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("w", encoding="utf-8") as f:
+                json.dump(self._cfg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存失败: {e}")
 
+    def ensure_group(self, group_id: str) -> None:
+        """群聊没有配置时创建默认配置并落盘"""
+        if group_id not in self._cfg:
+            self._cfg[group_id] = self.default_cfg.copy()
+            self.save()
 
+    # ---------- 对外接口 ----------
+    def get(self, group_id: str) -> dict:
+        """返回该群配置（无则返回空 dict）"""
+        return self._cfg.get(group_id, {})
 
-class GroupJoinManager:
-    def __init__(self, json_path: str):
-        self.data = GroupJoinData(json_path)
-        self.join_review_enabled: bool = False
-        self.reject_below_level: int = 0
-        self.auto_reject_without_keyword: bool = False
-        self.auto_blacklist_on_reject_keyword: bool = False
+    def set(self, group_id: str, **kwargs) -> None:
+        """直接覆写给定字段"""
+        self.ensure_group(group_id)
+        self._cfg.setdefault(group_id, {}).update(kwargs)
+        self.save()
 
-    def reject_reason(
-        self, group_id: str, user_id: str, comment: str | None = None, user_level: int | None = None
-    ) -> str | None:
-        """返回拒绝原因标识：
-        黑名单用户: 在用户ID黑名单中
-        命中黑名单关键词: 触发黑名单关键词
-        未包含进群关键词: 已配置自动同意关键词但未命中且开启自动拒绝
-        QQ等级过低: QQ等级低于设定阈值
-        None: 不拒绝
-        """
-        # 用户ID黑名单
-        if (
-            group_id in self.data.reject_ids
-            and user_id in self.data.reject_ids[group_id]
-        ):
-            return "黑名单用户"
+    def remove(self, group_id: str) -> None:
+        """删除整个群配置"""
+        self._cfg.pop(group_id, None)
+        self.save()
 
-        # QQ等级过低（优先使用群独立配置，否则使用全局配置）
-        level_threshold = self.data.reject_below_level.get(group_id, self.reject_below_level)
-        if (
-            level_threshold > 0
-            and user_level is not None
-            and user_level < level_threshold
-        ):
-            return f"QQ等级过低({user_level}<{level_threshold})"
+    # ---------- 快捷只读访问 ----------
+    def get_switch(self, group_id: str) -> bool:
+        return self.get(group_id).get("switch", False)
 
-        if comment:
-            lower_comment = comment.lower()
-            # 黑名单关键词
-            if group_id in self.data.reject_keywords and any(
-                rk.lower() in lower_comment for rk in self.data.reject_keywords[group_id]
-            ):
-                return "命中黑名单关键词"
-            # 未包含任何自动同意关键词（需开启开关 & 已设置白名单关键词）
-            # 优先使用群独立配置，否则使用全局配置
-            if (
-                self.should_auto_reject_without_keyword(group_id)
-                and group_id in self.data.accept_keywords
-                and self.data.accept_keywords[group_id]
-                and not any(
-                    ak.lower() in lower_comment
-                    for ak in self.data.accept_keywords[group_id]
-                )
-            ):
-                return "未包含进群关键词"
-        return None
-
-    def should_reject(
-        self, group_id: str, user_id: str, comment: str | None = None, user_level: int | None = None
-    ) -> bool:
-        return self.reject_reason(group_id, user_id, comment, user_level) is not None
-
-    def should_approve(self, group_id: str, comment: str) -> bool:
-        if group_id not in self.data.accept_keywords:
-            return False
-        return any(
-            kw.lower() in comment.lower() for kw in self.data.accept_keywords[group_id]
-        )
-
-    def add_keyword(self, group_id: str, keywords: list[str]):
-        self.data.accept_keywords.setdefault(group_id, []).extend(keywords)
-        self.data.accept_keywords[group_id] = list(
-            set(self.data.accept_keywords[group_id])
-        )
-        self.data.save()
-
-    def remove_keyword(self, group_id: str, keywords: list[str]):
-        if group_id in self.data.accept_keywords:
-            for k in keywords:
-                if k in self.data.accept_keywords[group_id]:
-                    self.data.accept_keywords[group_id].remove(k)
-            self.data.save()
-
-    def get_keywords(self, group_id: str) -> list[str]:
-        return self.data.accept_keywords.get(group_id, [])
-
-    def add_reject_keyword(self, group_id: str, keywords: list[str]):
-        self.data.reject_keywords.setdefault(group_id, []).extend(keywords)
-        self.data.reject_keywords[group_id] = list(
-            set(self.data.reject_keywords[group_id])
-        )
-        self.data.save()
-
-    def remove_reject_keyword(self, group_id: str, keywords: list[str]):
-        if group_id in self.data.reject_keywords:
-            for k in keywords:
-                if k in self.data.reject_keywords[group_id]:
-                    self.data.reject_keywords[group_id].remove(k)
-            self.data.save()
+    def get_accept_keywords(self, group_id: str) -> list[str]:
+        return self.get(group_id).get("accept_keywords", [])
 
     def get_reject_keywords(self, group_id: str) -> list[str]:
-        return self.data.reject_keywords.get(group_id, [])
+        return self.get(group_id).get("reject_keywords", [])
 
-    def add_reject_id(self, group_id: str, ids: list[str]):
-        self.data.reject_ids.setdefault(group_id, []).extend(ids)
-        self.data.reject_ids[group_id] = list(set(self.data.reject_ids[group_id]))
-        self.data.save()
+    def get_min_level(self, group_id: str) -> int:
+        return self.get(group_id).get("min_level", 0)
 
-    def remove_reject_id(self, group_id: str, ids: list[str]):
-        if group_id in self.data.reject_ids:
-            for uid in ids:
-                if uid in self.data.reject_ids[group_id]:
-                    self.data.reject_ids[group_id].remove(uid)
-            self.data.save()
+    def get_max_time(self, group_id: str) -> int:
+        return self.get(group_id).get("max_time", 0)
 
-    def get_reject_ids(self, group_id: str) -> list[str]:
-        return self.data.reject_ids.get(group_id, [])
+    def get_block_ids(self, group_id: str) -> list[str]:
+        return self.get(group_id).get("block_ids", [])
 
-    def blacklist_on_leave(self, group_id: str, user_id: str) -> None:
-        self.data.reject_ids.setdefault(group_id, []).append(user_id)
-        self.data.save()
+    # ---------- 快捷覆写 ----------
+    def set_switch(self, group_id: str, on: bool) -> None:
+        self.set(group_id, switch=on)
 
-    def set_join_review_enabled(self, group_id: str, enabled: bool | None) -> None:
-        """设置群的进群审核开关，None 表示删除群配置（使用全局配置）"""
-        if enabled is None:
-            self.data.join_review_enabled.pop(group_id, None)
-        else:
-            self.data.join_review_enabled[group_id] = enabled
-        self.data.save()
+    def set_accept_keywords(self, group_id: str, kws: list[str]) -> None:
+        self.set(group_id, accept_keywords=kws)
 
-    def get_join_review_enabled(self, group_id: str) -> bool | None:
-        """获取群的进群审核开关，返回 None 表示未设置（使用全局配置）"""
-        return self.data.join_review_enabled.get(group_id)
+    def set_reject_keywords(self, group_id: str, kws: list[str]) -> None:
+        self.set(group_id, reject_keywords=kws)
 
-    def is_join_review_enabled(self, group_id: str) -> bool:
-        """判断是否启用进群审核（优先使用群配置，否则使用全局配置）"""
-        group_setting = self.data.join_review_enabled.get(group_id)
-        if group_setting is not None:
-            return group_setting
-        return self.join_review_enabled
+    def set_min_level(self, group_id: str, level: int) -> None:
+        self.set(group_id, min_level=level)
 
-    def set_level_threshold(self, group_id: str, level: int) -> None:
-        """设置群的进群等级门槛"""
-        if level <= 0:
-            # 删除群配置，回退到全局配置
-            self.data.reject_below_level.pop(group_id, None)
-        else:
-            self.data.reject_below_level[group_id] = level
-        self.data.save()
+    def set_max_time(self, group_id: str, times: int) -> None:
+        self.set(group_id, max_time=times)
 
-    def get_level_threshold(self, group_id: str) -> int | None:
-        """获取群的进群等级门槛，返回 None 表示未设置（使用全局配置）"""
-        return self.data.reject_below_level.get(group_id)
-
-    def set_auto_reject_without_keyword(self, group_id: str, enabled: bool | None) -> None:
-        """设置群的未命中关键词自动拒绝开关，None 表示删除群配置（使用全局配置）"""
-        if enabled is None:
-            self.data.auto_reject_without_keyword.pop(group_id, None)
-        else:
-            self.data.auto_reject_without_keyword[group_id] = enabled
-        self.data.save()
-
-    def get_auto_reject_without_keyword(self, group_id: str) -> bool | None:
-        """获取群的未命中关键词自动拒绝开关，返回 None 表示未设置（使用全局配置）"""
-        return self.data.auto_reject_without_keyword.get(group_id)
-
-    def should_auto_reject_without_keyword(self, group_id: str) -> bool:
-        """判断是否应该在未命中关键词时自动拒绝（优先使用群配置，否则使用全局配置）"""
-        group_setting = self.data.auto_reject_without_keyword.get(group_id)
-        if group_setting is not None:
-            return group_setting
-        return self.auto_reject_without_keyword
-
-    def set_auto_blacklist_on_reject_keyword(self, group_id: str, enabled: bool | None) -> None:
-        """设置群的命中黑词自动拉黑开关，None 表示删除群配置（使用全局配置）"""
-        if enabled is None:
-            self.data.auto_blacklist_on_reject_keyword.pop(group_id, None)
-        else:
-            self.data.auto_blacklist_on_reject_keyword[group_id] = enabled
-        self.data.save()
-
-    def get_auto_blacklist_on_reject_keyword(self, group_id: str) -> bool | None:
-        """获取群的命中黑词自动拉黑开关，返回 None 表示未设置（使用全局配置）"""
-        return self.data.auto_blacklist_on_reject_keyword.get(group_id)
-
-    def should_auto_blacklist_on_reject_keyword(self, group_id: str) -> bool:
-        """判断是否应该在命中黑词时自动拉黑（优先使用群配置，否则使用全局配置）"""
-        group_setting = self.data.auto_blacklist_on_reject_keyword.get(group_id)
-        if group_setting is not None:
-            return group_setting
-        return self.auto_blacklist_on_reject_keyword
+    def set_block_ids(self, group_id: str, uids: list[str]) -> None:
+        self.set(group_id, block_ids=uids)
 
 
 class JoinHandle:
-    def __init__(self, config: AstrBotConfig, data_dir: Path, admins_id: list[str]):
-        self.conf = config
-        self.admins_id: list[str] = admins_id
-        self.group_join_manager = GroupJoinManager(
-            str(data_dir / "group_join_data.json")
-        )
-        self.group_join_manager.join_review_enabled = bool(
-            config.get("enable_audit", False)
-        )
-        self.group_join_manager.reject_below_level = int(
-            config.get("reject_below_level", 0)
-        )
-        self.group_join_manager.auto_reject_without_keyword = bool(
-            config.get("auto_reject_without_keyword", False)
-        )
-        self.group_join_manager.auto_blacklist_on_reject_keyword = bool(
-            config.get("auto_blacklist_on_reject_keyword", False)
-        )
+    DB_VERSION = 2
+
+    def __init__(self, config: AstrBotConfig, data_dir: Path, admin_ids: list[str]):
+        self.jconf = config["join_config"]
+        self.admin_ids: list[str] = admin_ids
+        json_file = data_dir / f"group_join_data_v{self.DB_VERSION}.json"
+        self.db = GroupJoinData(json_file, self.jconf)
+        # 加群失败次数缓存（key 用 f"{group_id}_{user_id}"）
+        self._fail: dict[str, int] = {}
 
     async def _send_admin(self, client: CQHttp, message: str):
         """向bot管理员发送私聊消息"""
-        for admin_id in self.admins_id:
+        for admin_id in self.admin_ids:
             if admin_id.isdigit():
                 try:
                     await client.send_private_msg(
@@ -284,240 +131,153 @@ class JoinHandle:
                 except Exception as e:
                     logger.error(f"无法发送消息给bot管理员：{e}")
 
-    async def add_accept_keyword(self, event: AiocqhttpMessageEvent):
-        """添加自动批准进群的关键词"""
-        if keywords := event.message_str.removeprefix("添加进群关键词").strip().split():
-            self.group_join_manager.add_keyword(event.get_group_id(), keywords)
-            await event.send(event.plain_result(f"新增进群关键词：{keywords}"))
+    @staticmethod
+    def _parse_mode(mode: str | bool | None):
+        """解析模式"""
+        match mode:
+            case "开", "开启", "on", "true", "1", True:
+                return True
+            case "关", "关闭", "off", "false", "0", False:
+                return False
+            case _:
+                return None
+
+    # -----------修改配置-----------------
+
+    async def handle_join_review(
+        self, event: AiocqhttpMessageEvent, mode_str: str | bool | None
+    ):
+        """设置/查看本群进群审核开关"""
+        gid = event.get_group_id()
+        mode = self._parse_mode(mode_str)
+        if mode is True:
+            self.db.set_switch(gid, True)
+            await event.send(event.plain_result("已开启本群进群审核"))
+        elif mode is False:
+            self.db.set_switch(gid, False)
+            await event.send(event.plain_result("已关闭本群进群审核"))
         else:
-            await event.send(event.plain_result("未输入任何关键词"))
+            status = "开启" if self.db.get_switch(gid) else "关闭"
+            await event.send(event.plain_result(f"本群进群审核：{status}"))
 
-    async def remove_accept_keyword(self, event: AiocqhttpMessageEvent):
-        """删除自动批准进群的关键词"""
-        if keywords := event.message_str.removeprefix("删除进群关键词").strip().split():
-            self.group_join_manager.remove_keyword(event.get_group_id(), keywords)
-            await event.send(event.plain_result(f"已删进群关键词：{keywords}"))
+    async def handle_accept_keyword(self, event: AiocqhttpMessageEvent):
+        """设置/查看自动批准进群的关键词"""
+        gid = event.get_group_id()
+        if keywords := event.message_str.removeprefix("进群白词").strip().split():
+            self.db.set_accept_keywords(gid, keywords)
+            await event.send(
+                event.plain_result(f"本群的进群关键词已设置为：{keywords}")
+            )
         else:
-            await event.send(event.plain_result("未指定要删除的关键词"))
+            keywords = self.db.get_accept_keywords(gid)
+            await event.send(event.plain_result(f"本群的进群关键词：{keywords}"))
 
-    async def view_accept_keywords(self, event: AiocqhttpMessageEvent):
-        """查看自动批准进群的关键词"""
-        keywords = self.group_join_manager.get_keywords(event.get_group_id())
-        if not keywords:
-            await event.send(event.plain_result("本群没有设置进群关键词"))
-            return
-        await event.send(event.plain_result(f"本群的进群关键词：{keywords}"))
-
-    async def add_reject_keywords(self, event: AiocqhttpMessageEvent):
-        """添加进群黑名单关键词（命中即拒绝）"""
-        if keywords := event.message_str.removeprefix("添加进群黑词").strip().split():
-            self.group_join_manager.add_reject_keyword(event.get_group_id(), keywords)
+    async def handle_reject_keywords(self, event: AiocqhttpMessageEvent):
+        """设置/查看进群黑名单关键词"""
+        gid = event.get_group_id()
+        if keywords := event.message_str.removeprefix("进群黑词").strip().split():
+            self.db.set_reject_keywords(gid, keywords)
             await event.send(event.plain_result(f"新增进群黑名单关键词：{keywords}"))
         else:
-            await event.send(event.plain_result("未输入任何关键词"))
+            keywords = self.db.get_reject_keywords(gid)
+            await event.send(event.plain_result(f"本群的进群黑名单关键词：{keywords}"))
 
-    async def remove_reject_keywords(self, event: AiocqhttpMessageEvent):
-        """删除进群黑名单关键词"""
-        if keywords := event.message_str.removeprefix("删除进群黑词").strip().split():
-            self.group_join_manager.remove_reject_keyword(event.get_group_id(), keywords)
-            await event.send(event.plain_result(f"已删进群黑名单关键词：{keywords}"))
+    async def handle_level_threshold(
+        self, event: AiocqhttpMessageEvent, level: int | None
+    ):
+        """设置进群等级门槛"""
+        gid = event.get_group_id()
+        if isinstance(level, int):
+            self.db.set_min_level(gid, level)
+            msg = (
+                f"已设置本群进群等级门槛：{level}级"
+                if level > 0
+                else "已解除本群的进群等级限制"
+            )
+            await event.send(event.plain_result(msg))
         else:
-            await event.send(event.plain_result("未指定要删除的关键词"))
+            level = self.db.get_min_level(gid)
+            await event.send(event.plain_result(f"本群的进群等级门槛: {level}级"))
 
-    async def view_reject_keywords(self, event: AiocqhttpMessageEvent):
-        """查看进群黑名单关键词"""
-        keywords = self.group_join_manager.get_reject_keywords(event.get_group_id())
-        if not keywords:
-            await event.send(event.plain_result("本群没有设置进群黑名单关键词"))
-            return
-        await event.send(event.plain_result(f"本群的进群黑名单关键词：{keywords}"))
-
-    async def add_reject_ids(self, event: AiocqhttpMessageEvent):
-        """添加指定ID到进群黑名单"""
-        parts = event.message_str.strip().split(" ")
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供至少一个用户ID"))
-            return
-        reject_ids = list(set(parts[1:]))
-        self.group_join_manager.add_reject_id(event.get_group_id(), reject_ids)
-        await event.send(event.plain_result(f"进群黑名单新增ID：{reject_ids}"))
-
-    async def remove_reject_ids(self, event: AiocqhttpMessageEvent):
-        """从进群黑名单中删除指定ID"""
-        parts = event.message_str.strip().split(" ")
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供至少一个用户ID。"))
-            return
-        ids = list(set(parts[1:]))
-        self.group_join_manager.remove_reject_id(event.get_group_id(), ids)
-        await event.send(event.plain_result(f"已从黑名单中删除：{ids}"))
-
-
-    async def view_reject_ids(self, event: AiocqhttpMessageEvent):
-        """查看进群黑名单"""
-        ids = self.group_join_manager.get_reject_ids(event.get_group_id())
-        if not ids:
-            await event.send(event.plain_result("本群没有设置进群黑名单"))
-            return
-        await event.send(event.plain_result(f"本群的进群黑名单：{ids}"))
-
-    async def set_level_threshold(self, event: AiocqhttpMessageEvent):
-        """设置本群进群等级门槛"""
-        parts = event.message_str.strip().split()
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供等级数值"))
-            return
-        try:
-            level = int(parts[1])
-        except ValueError:
-            await event.send(event.plain_result("等级必须是整数"))
-            return
-
-        group_id = event.get_group_id()
-        self.group_join_manager.set_level_threshold(group_id, level)
-
-        if level <= 0:
-            global_level = self.group_join_manager.reject_below_level
-            if global_level > 0:
-                await event.send(event.plain_result(f"已清除本群等级门槛，将使用全局配置（{global_level}级）"))
-            else:
-                await event.send(event.plain_result("已清除本群等级门槛，当前未启用等级限制"))
+    async def handle_join_time(self, event: AiocqhttpMessageEvent, time: int | None):
+        """设置最大进群次数"""
+        gid = event.get_group_id()
+        if isinstance(time, int):
+            self.db.set_max_time(gid, time)
+            msg = (
+                f"已限制本群进群次数：{time}次"
+                if time > 0
+                else "已解除本群的进群等级限制"
+            )
+            await event.send(event.plain_result(msg))
         else:
-            await event.send(event.plain_result(f"已设置本群进群等级门槛为 {level} 级"))
+            time = self.db.get_max_time(gid)
+            await event.send(event.plain_result(f"本群的进群最多可尝试 {time} 次"))
 
-    async def view_level_threshold(self, event: AiocqhttpMessageEvent):
-        """查看本群进群等级门槛"""
-        group_id = event.get_group_id()
-        group_level = self.group_join_manager.get_level_threshold(group_id)
-        global_level = self.group_join_manager.reject_below_level
-
-        if group_level is not None:
-            await event.send(event.plain_result(f"本群进群等级门槛：{group_level} 级（群独立配置）"))
-        elif global_level > 0:
-            await event.send(event.plain_result(f"本群进群等级门槛：{global_level} 级（全局配置）"))
+    async def handle_reject_ids(self, event: AiocqhttpMessageEvent):
+        """设置/查看进群黑名单"""
+        gid = event.get_group_id()
+        if ids := event.message_str.removeprefix("进群黑名单").strip().split():
+            self.db.set_block_ids(gid, ids)
         else:
-            await event.send(event.plain_result("本群未设置进群等级门槛"))
+            ids = self.db.get_block_ids(gid)
+            await event.send(event.plain_result(f"本群的进群黑名单：{ids}"))
 
-    async def set_auto_reject_without_keyword(self, event: AiocqhttpMessageEvent):
-        """设置本群未命中关键词自动拒绝开关"""
-        parts = event.message_str.strip().split()
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
-            return
-        arg = parts[1]
-        group_id = event.get_group_id()
+    # ---------辅助函数-----------------
 
-        if arg in ("开", "开启", "on", "true", "1"):
-            self.group_join_manager.set_auto_reject_without_keyword(group_id, True)
-            await event.send(event.plain_result("已开启本群未命中关键词自动拒绝"))
-        elif arg in ("关", "关闭", "off", "false", "0"):
-            self.group_join_manager.set_auto_reject_without_keyword(group_id, False)
-            await event.send(event.plain_result("已关闭本群未命中关键词自动拒绝"))
-        elif arg in ("清除", "删除", "默认", "default", "clear"):
-            self.group_join_manager.set_auto_reject_without_keyword(group_id, None)
-            global_setting = self.group_join_manager.auto_reject_without_keyword
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"已清除本群配置，将使用全局配置（{status}）"))
-        else:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
+    def should_approve(
+        self,
+        group_id: str,
+        user_id: str,
+        comment: str | None = None,
+        user_level: int | None = None,
+    ) -> tuple[bool, str]:
+        """判断是否让该用户入群，返回原因"""
+        # 黑名单用户
+        if group_id in self.db.get(group_id) and user_id in self.db.get_block_ids(
+            group_id
+        ):
+            return False, "黑名单用户"
 
-    async def view_auto_reject_without_keyword(self, event: AiocqhttpMessageEvent):
-        """查看本群未命中关键词自动拒绝开关状态"""
-        group_id = event.get_group_id()
-        group_setting = self.group_join_manager.get_auto_reject_without_keyword(group_id)
-        global_setting = self.group_join_manager.auto_reject_without_keyword
+        # QQ等级过低
+        min_level = self.db.get_min_level(group_id)
+        if min_level > 0 and user_level and user_level < min_level:
+            return False, f"QQ等级过低({user_level}<{min_level})"
 
-        if group_setting is not None:
-            status = "开启" if group_setting else "关闭"
-            await event.send(event.plain_result(f"本群未命中关键词自动拒绝：{status}（群独立配置）"))
-        else:
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"本群未命中关键词自动拒绝：{status}（全局配置）"))
+        # 命中进群黑词
+        if comment:
+            lower_comment = comment.lower()
+            if any(
+                rk.lower() in lower_comment
+                for rk in self.db.get_reject_keywords(group_id)
+            ):
+                block_ids = list(set(self.db.get_block_ids(group_id)) | {user_id})
+                self.db.set_block_ids(group_id, block_ids)
+                return False, "命中进群黑词"
 
-    async def set_auto_blacklist_on_reject_keyword(self, event: AiocqhttpMessageEvent):
-        """设置本群命中黑词自动拉黑开关"""
-        parts = event.message_str.strip().split()
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
-            return
-        arg = parts[1]
-        group_id = event.get_group_id()
+        # 最大失败次数（考虑到只是防爆破，存内存里足矣，重启清零）
+        max_fail = self.db.get_max_time(group_id)
+        if max_fail > 0:
+            key = f"{group_id}_{user_id}"
+            self._fail[key] = self._fail.get(key, 0) + 1
+            if self._fail[key] > max_fail:
+                return False, f"进群尝试次数已达上限({max_fail}次)"
 
-        if arg in ("开", "开启", "on", "true", "1"):
-            self.group_join_manager.set_auto_blacklist_on_reject_keyword(group_id, True)
-            await event.send(event.plain_result("已开启本群命中黑词自动拉黑"))
-        elif arg in ("关", "关闭", "off", "false", "0"):
-            self.group_join_manager.set_auto_blacklist_on_reject_keyword(group_id, False)
-            await event.send(event.plain_result("已关闭本群命中黑词自动拉黑"))
-        elif arg in ("清除", "删除", "默认", "default", "clear"):
-            self.group_join_manager.set_auto_blacklist_on_reject_keyword(group_id, None)
-            global_setting = self.group_join_manager.auto_blacklist_on_reject_keyword
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"已清除本群配置，将使用全局配置（{status}）"))
-        else:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
+        # 命中进群白词
+        if (
+            comment
+            and group_id in self.db.get_accept_keywords(group_id)
+            and any(
+                ak.lower() in comment.lower()
+                for ak in self.db.get_accept_keywords(group_id)
+            )
+        ):
+            return True, "验证通过"
 
-    async def view_auto_blacklist_on_reject_keyword(self, event: AiocqhttpMessageEvent):
-        """查看本群命中黑词自动拉黑开关状态"""
-        group_id = event.get_group_id()
-        group_setting = self.group_join_manager.get_auto_blacklist_on_reject_keyword(group_id)
-        global_setting = self.group_join_manager.auto_blacklist_on_reject_keyword
+        # 未包含进群关键词
+        return True, ""
 
-        if group_setting is not None:
-            status = "开启" if group_setting else "关闭"
-            await event.send(event.plain_result(f"本群命中黑词自动拉黑：{status}（群独立配置）"))
-        else:
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"本群命中黑词自动拉黑：{status}（全局配置）"))
-
-    async def set_join_review(self, event: AiocqhttpMessageEvent):
-        """设置本群进群审核开关"""
-        parts = event.message_str.strip().split()
-        if len(parts) < 2:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
-            return
-        arg = parts[1]
-        group_id = event.get_group_id()
-
-        if arg in ("开", "开启", "on", "true", "1"):
-            self.group_join_manager.set_join_review_enabled(group_id, True)
-            await event.send(event.plain_result("已开启本群进群审核"))
-        elif arg in ("关", "关闭", "off", "false", "0"):
-            self.group_join_manager.set_join_review_enabled(group_id, False)
-            await event.send(event.plain_result("已关闭本群进群审核"))
-        elif arg in ("清除", "删除", "默认", "default", "clear"):
-            self.group_join_manager.set_join_review_enabled(group_id, None)
-            global_setting = self.group_join_manager.join_review_enabled
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"已清除本群配置，将使用全局配置（{status}）"))
-        else:
-            await event.send(event.plain_result("请提供参数：开/关/清除"))
-
-    async def view_join_review(self, event: AiocqhttpMessageEvent):
-        """查看本群进群审核开关状态"""
-        group_id = event.get_group_id()
-        group_setting = self.group_join_manager.get_join_review_enabled(group_id)
-        global_setting = self.group_join_manager.join_review_enabled
-
-        if group_setting is not None:
-            status = "开启" if group_setting else "关闭"
-            await event.send(event.plain_result(f"本群进群审核：{status}（群独立配置）"))
-        else:
-            status = "开启" if global_setting else "关闭"
-            await event.send(event.plain_result(f"本群进群审核：{status}（全局配置）"))
-
-    async def agree_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
-        """批准进群申请"""
-        reply = await self.approve(event=event, extra=extra, approve=True)
-        if reply:
-            await event.send(event.plain_result(reply))
-
-    async def refuse_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
-        """驳回进群申请"""
-        reply = await self.approve(event=event, extra=extra, approve=False)
-        if reply:
-            await event.send(event.plain_result(reply))
-
+    # ---------处理事件-----------------
 
     async def event_monitoring(self, event: AiocqhttpMessageEvent):
         """监听进群/退群事件"""
@@ -525,91 +285,103 @@ class JoinHandle:
         if not isinstance(raw, dict):
             return
 
+        group_id: str = str(raw.get("group_id", ""))
+
+        # 进群审核总开关
+        if not self.db.get_switch(group_id):
+            return
+        self.db.ensure_group(group_id)
+
         client = event.bot
-        group_id: int = raw.get("group_id", 0)
-        user_id: int = raw.get("user_id", 0)
+        user_id: str = raw.get("user_id", "")
+
         # 进群申请事件
         if (
-            self.group_join_manager.is_join_review_enabled(str(group_id))
-            and raw.get("post_type") == "request"
+            raw.get("post_type") == "request"
             and raw.get("request_type") == "group"
             and raw.get("sub_type") == "add"
         ):
             comment = raw.get("comment")
             flag = raw.get("flag", "")
-            stranger_info = await client.get_stranger_info(user_id=user_id)
+            stranger_info = await client.get_stranger_info(user_id=int(user_id))
             nickname = stranger_info.get("nickname") or "未知昵称"
-            napcat_level = stranger_info.get("qqLevel")
-            lagrange_level = stranger_info.get("level")
-            user_level = napcat_level or lagrange_level
+            user_level = stranger_info.get("qqLevel") or stranger_info.get("level")
+
+            # 生成并发送通知
             reply = f"【进群申请】批准/驳回：\n昵称：{nickname}\nQQ：{user_id}\nflag：{flag}"
             if user_level is not None:
                 reply += f"\n等级：{user_level}"
             if comment:
                 reply += f"\n{comment}"
-            if self.conf["admin_audit"]:
+            if self.jconf["admin_audit"]:
                 await self._send_admin(client, reply)
             else:
                 await event.send(event.plain_result(reply))
 
-            reason = self.group_join_manager.reject_reason(
-                str(group_id), str(user_id), comment, user_level
+            # 判断是否通过
+            approve, reason = self.should_approve(
+                group_id, user_id, comment, user_level
             )
-            if reason:
-                await client.set_group_add_request(
-                    flag=flag, sub_type="add", approve=False, reason=reason,
-                )
-                reply_msg = f"{reason}，已自动拒绝进群"
-                # 命中黑名单词汇时自动拉黑（优先使用群配置，否则使用全局配置）
-                if (
-                    reason == "命中黑名单关键词"
-                    and self.group_join_manager.should_auto_blacklist_on_reject_keyword(str(group_id))
-                ):
-                    self.group_join_manager.add_reject_id(str(group_id), [str(user_id)])
-                    reply_msg += "，并已加入黑名单"
-                await event.send(event.plain_result(reply_msg))
-            elif comment and self.group_join_manager.should_approve(
-                str(group_id), comment
-            ):
-                await client.set_group_add_request(
-                    flag=flag, sub_type="add", approve=True
-                )
-                await event.send(event.plain_result("验证通过，已自动同意进群"))
+            await client.set_group_add_request(
+                flag=flag,
+                sub_type="add",
+                approve=approve,
+                reason=reason if not approve else "",
+            )
+            msg = f"已自动{'批准' if approve else '驳回'}: {reason}"
+            await event.send(event.plain_result(msg))
 
         # 主动退群事件
         elif (
-            self.conf["enable_black"]
+            self.jconf["leave_notify"]
             and raw.get("post_type") == "notice"
             and raw.get("notice_type") == "group_decrease"
             and raw.get("sub_type") == "leave"
         ):
-            nickname = (await client.get_stranger_info(user_id=user_id))[
-                "nickname"
-            ] or "未知昵称"
-            reply = f"{nickname}({user_id}) 主动退群了"
-            if self.conf["auto_black"]:
-                self.group_join_manager.blacklist_on_leave(str(group_id), str(user_id))
-                reply += "，已拉进黑名单"
-            await event.send(event.plain_result(reply))
+            nickname = await get_nickname(event, user_id)
+            msg = f"{nickname}({user_id}) 主动退群了"
+            if self.jconf["leave_block"]:
+                block_ids = self.db.get_block_ids(group_id) + [user_id]
+                self.db.set_block_ids(group_id, block_ids)
+                msg += "，已拉进黑名单"
+            await event.send(event.plain_result(msg))
 
-        # 进群禁言
+        # 进群欢迎、禁言
         elif (
             raw.get("notice_type") == "group_increase"
             and str(user_id) != event.get_self_id()
         ):
-            await event.send(event.plain_result(self.conf["increase"]["welcome"]))
-            if self.conf["increase"]["ban_time"] > 0:
+            # 进群欢迎
+            if self.jconf["welcome_template"]:
+                welcome_template: str = self.jconf["welcome_template"]
+                nickname = await get_nickname(event, user_id)
+                welcome = welcome_template.format(nickname=nickname)
+                await event.send(event.plain_result(welcome))
+            # 进群禁言
+            if self.jconf["ban_time"] > 0:
                 try:
                     await client.set_group_ban(
-                        group_id=group_id,
-                        user_id=user_id,
-                        duration=self.conf["increase"]["ban_time"],
+                        group_id=int(group_id),
+                        user_id=int(user_id),
+                        duration=self.jconf["ban_time"],
                     )
                 except Exception:
                     pass
 
+    async def agree_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
+        """批准进群申请"""
+        reply = await self.set_approve(event=event, extra=extra, approve=True)
+        if reply:
+            await event.send(event.plain_result(reply))
+
+    async def refuse_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
+        """驳回进群申请"""
+        reply = await self.set_approve(event=event, extra=extra, approve=False)
+        if reply:
+            await event.send(event.plain_result(reply))
+
     @staticmethod
-    async def approve(
+    async def set_approve(
         event: AiocqhttpMessageEvent, extra: str = "", approve: bool = True
     ) -> str | None:
         """处理进群申请"""
