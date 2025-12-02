@@ -344,7 +344,7 @@ class QQAdminPlugin(Star):
         在群聊中禁言某用户。被禁言的用户在禁言期间将无法发送消息。
         Args:
             user_id(string): 要禁言的用户的QQ账号，必定为一串数字，如(12345678)
-            duration(number): 禁言持续时间（秒），范围为0~86400, 0表示解除禁言。
+            duration(number): 禁言持续时间（秒），范围为0~86400, 0表示取消禁言
         """
         try:
             await event.bot.set_group_ban(
@@ -355,11 +355,11 @@ class QQAdminPlugin(Star):
             logger.info(
                 f"用户：{user_id}在群聊中被：{event.get_sender_name()}执行禁言{duration}秒"
             )
-            return f"已将 {user_id} 禁言成功"  # type: ignore
+            event.stop_event()
+            yield
         except Exception as e:
             logger.error(f"禁言用户 {user_id} 失败: {e}")
-            return f"禁言用户 {user_id} 失败: {e}"
-
+            yield
 
     @filter.command("群管帮助")
     async def qq_admin_help(self, event: AiocqhttpMessageEvent):
