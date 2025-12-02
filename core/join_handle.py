@@ -235,17 +235,6 @@ class JoinHandle:
             else:
                 level = info.get("qqLevel") or info.get("level")
 
-            # 生成并发送通知
-            notice = f"【进群申请】批准/驳回：\n昵称：{nickname}\nQQ：{user_id}\nflag：{flag}"
-            if level is not None:
-                notice += f"\n等级：{level}"
-            if comment:
-                notice += f"\n{comment}"
-            if self.jconf["admin_audit"]:
-                await self._send_admin(client, notice)
-            else:
-                await event.send(event.plain_result(notice))
-
             # 判断是否通过
             approve, reason = await self.should_approve(
                 group_id, user_id, comment, level
@@ -253,25 +242,37 @@ class JoinHandle:
             # 清理缓存
             if approve is True:
                 self._fail.pop(f"{group_id}_{user_id}", None)
-            # 人工审核
-            if approve is None:
-                return
+
             # 自动审核
-            try:
-                await client.set_group_add_request(
-                    flag=flag,
-                    sub_type="add",
-                    approve=approve,
-                    reason="" if approve else reason,
-                )
-                msg = f"自动{'批准' if approve else '驳回'}: {reason}"
-                if self.jconf["admin_audit"]:
-                    await self._send_admin(client, msg)
-                else:
-                    await event.send(event.plain_result(msg))
-            except Exception as e:
-                logger.warning(f"set_group_add_request failed: {e}")
-                return
+            if approve is not None:
+                try:
+                    await client.set_group_add_request(
+                        flag=flag,
+                        sub_type="add",
+                        approve=approve,
+                        reason="" if approve else reason,
+                    )
+                    approve_msg = f"自动{'批准' if approve else '驳回'}：{reason}"
+                except Exception as e:
+                    logger.warning(f"set_group_add_request failed: {e}")
+                    return
+            else:
+                approve_msg = ""
+
+            # 生成并发送通知
+            tip = "批准/驳回：" if not approve_msg else ""
+            notice = f"【进群申请】{tip}\n昵称：{nickname}\nQQ：{user_id}\nflag：{flag}"
+            if level is not None:
+                notice += f"\n等级：{level}"
+            if comment:
+                notice += f"\n{comment}"
+            if approve_msg:
+                notice += f"\n\n{approve_msg}"
+
+            if self.jconf["admin_audit"]:
+                await self._send_admin(client, notice)
+            else:
+                await event.send(event.plain_result(notice))
 
         # 主动退群事件
         elif (
