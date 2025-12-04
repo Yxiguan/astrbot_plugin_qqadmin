@@ -130,9 +130,8 @@ class PermissionManager:
     ) -> str | None:
         user_level = await self.get_perm_level(event, user_id=event.get_sender_id())
 
-        required_level = self.perms.get(perm_key)
-        if required_level is None:
-            return None
+        # 未指定权限，则默认至少需要管理员权限
+        required_level = self.perms.get(perm_key) or PermLevel.ADMIN
 
         if user_level > required_level:
             return f"你没{required_level}权限"

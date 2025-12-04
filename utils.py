@@ -88,14 +88,35 @@ def print_logo():
     print("\033[94m欢迎使用群管插件！\033[0m")  # 蓝色文字
 
 
-async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
-    """获取指定群友的群昵称或Q名"""
+
+async def get_nickname(event: AiocqhttpMessageEvent, user_id: int | str) -> str:
+    """获取指定群友的群昵称或 Q 名，群接口失败/空结果自动降级到陌生人资料"""
+    user_id = int(user_id)
     client = event.bot
     group_id = event.get_group_id()
-    all_info = await client.get_group_member_info(
-        group_id=int(group_id), user_id=int(user_id)
-    )
-    return all_info.get("card") or all_info.get("nickname")
+    info = {}
+
+    # 在群里就先试群资料，任何异常或空结果都跳过
+    if group_id.isdigit():
+        try:
+            info = (
+                await client.get_group_member_info(
+                    group_id=int(group_id), user_id=user_id
+                )
+                or {}
+            )
+        except Exception:
+            pass
+
+    # 群资料没拿到就降级到陌生人资料
+    if not info:
+        try:
+            info = await client.get_stranger_info(user_id=user_id) or {}
+        except Exception:
+            pass
+
+    # 依次取群名片、QQ 昵称、通用 nick，兜底数字 UID
+    return info.get("card") or info.get("nickname") or info.get("nick") or str(user_id)
 
 
 def get_ats(event: AiocqhttpMessageEvent) -> list[str]:
@@ -165,4 +186,13 @@ def extract_image_url(chain: list[BaseMessageComponent]) -> str | None:
     return None
 
 
-
+def parse_bool(mode: str | bool | None):
+    """解析布尔值"""
+    mode = str(mode).strip().lower()
+    match mode:
+        case "开" | "开启" | "启用" | "on" | "true" | "1" | "是" | "真" :
+            return True
+        case "关" | "关闭" | "禁用" | "off" | "false" | "0" | "否" | "假" :
+            return False
+        case _:
+            return None

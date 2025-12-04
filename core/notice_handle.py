@@ -23,7 +23,7 @@ class NoticeHandle:
 
     async def send_group_notice(self, event: AiocqhttpMessageEvent):
         """(引用图片)发布群公告 xxx"""
-        content = event.message_str.removeprefix("发布群公告").strip()
+        content = event.message_str.partition(" ")[2]
         if not content:
             await event.send(event.plain_result("你又不说要发什么群公告"))
             return

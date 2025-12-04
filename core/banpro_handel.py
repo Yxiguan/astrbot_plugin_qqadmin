@@ -1,7 +1,9 @@
 import asyncio
+import json
 import random
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
@@ -10,15 +12,20 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 from ..data import QQAdminDB
-from ..utils import get_ats, get_nickname
+from ..utils import get_ats, get_nickname, parse_bool
 
 
 class BanproHandle:
-    def __init__(self, config: AstrBotConfig, db: QQAdminDB):
+    def __init__(self, config: AstrBotConfig, db: QQAdminDB, ban_lexicon_path: Path):
         self.conf = config
         self.db = db
+        self.builtin_ban_words = json.loads(
+            ban_lexicon_path.read_text(encoding="utf-8")
+        )["words"]
+        self.spamming_count = 5
+        self.spamming_interval = 0.5
         self.msg_timestamps: dict[str, dict[str, deque[float]]] = defaultdict(
-            lambda: defaultdict(lambda: deque(maxlen=self.conf["spamming"]["count"]))
+            lambda: defaultdict(lambda: deque(maxlen=self.spamming_count))
         )
         self.last_banned_time: dict[str, dict[str, float]] = defaultdict(
             lambda: defaultdict(float)
@@ -26,24 +33,72 @@ class BanproHandle:
         # 记录投票 {group_id: {"target": target_id, "votes": {user_id: bool}, "expire": timestamp, "threshold": threshold,}}
         self.vote_cache: dict[str, dict] = {}
 
+    async def handle_word_ban_time(
+        self, event: AiocqhttpMessageEvent, time: int | None
+    ):
+        """设置禁词禁言时长"""
+        gid = event.get_group_id()
+        if isinstance(time, int):
+            await self.db.set(gid, "word_ban_time", time)
+            msg = (
+                f"本群禁词禁言时长已设为：{time} 秒"
+                if time > 0
+                else "本群禁词禁言已关闭"
+            )
+            await event.send(event.plain_result(msg))
+        else:
+            status = await self.db.get(gid, "word_ban_time", 0)
+            await event.send(event.plain_result(f"本群禁词禁言时长：{status} 秒"))
+
     async def handle_ban_words(self, event: AiocqhttpMessageEvent):
         """设置/查看违禁词"""
         gid = event.get_group_id()
-        if words := event.message_str.removeprefix("违禁词").strip().split():
-            await self.db.set_ban_words(gid, words)
+
+        # 设置违禁词
+        if words := event.message_str.partition(" ")[2].split():
+            await self.db.set(gid, "custom_ban_words", words)
             await event.send(event.plain_result(f"本群违禁词已设为：{words}"))
         else:
-            words = await self.db.get_ban_words(gid)
+            # 查看违禁词
+            words = await self.db.get(gid, "custom_ban_words", [])
             await event.send(event.plain_result(f"本群违禁词：{words}"))
 
-    async def on_ban_words(self, event: AiocqhttpMessageEvent):
-        """违禁词禁言"""
+    async def handle_builtin_ban_words(
+        self, event: AiocqhttpMessageEvent, mode_str: str | bool | None
+    ):
+        """启用/停用内置违禁词"""
         gid = event.get_group_id()
-        ban_words = await self.db.get_ban_words(gid)
+        mode = parse_bool(mode_str)
+
+        if isinstance(mode, bool):
+            await self.db.set(gid, "builtin_ban", mode)
+            await event.send(event.plain_result(f"本群内置禁词：{mode}"))
+        else:
+            status = await self.db.get(gid, "builtin_ban", False)
+            await event.send(event.plain_result(f"本群内置禁词：{status}"))
+
+    async def on_ban_words(self, event: AiocqhttpMessageEvent):
+        """检测禁词并撤回消息、禁言用户"""
+        gid = event.get_group_id()
+        ban_words = await self.db.get(gid, "custom_ban_words", [])
         if not ban_words:
             return
 
-        # 检测违禁词
+        # 检测自定义的违禁词
+        if ban_words:
+            if await self.check_ban_words(event, ban_words):
+                return
+
+        # 检测内置违禁词
+        if await self.db.get(gid, "builtin_ban", False):
+            if await self.check_ban_words(event, self.builtin_ban_words):
+                return
+
+    async def check_ban_words(
+        self, event: AiocqhttpMessageEvent, ban_words: list[str]
+    ) -> bool:
+        """检测内置违禁词并撤回消息"""
+        gid = event.get_group_id()
         for word in ban_words:
             if word in event.message_str:
                 # 撤回消息
@@ -53,49 +108,62 @@ class BanproHandle:
                 except Exception:
                     pass
                 # 禁言发送者
-                if self.conf["ban_words_time"] > 0:
+                ban_time = await self.db.get(gid, "word_ban_time", 0)
+                if ban_time > 0:
                     try:
                         await event.bot.set_group_ban(
                             group_id=int(event.get_group_id()),
                             user_id=int(event.get_sender_id()),
-                            duration=self.conf["ban_words_time"],
+                            duration=ban_time,
                         )
                     except Exception:
                         logger.error(f"bot在群{event.get_group_id()}权限不足，禁言失败")
                         pass
-                break
+                return True
+        return False
+
+    async def handle_spamming_ban_time(
+        self, event: AiocqhttpMessageEvent, time: int | None
+    ):
+        """设置刷屏禁言时长"""
+        gid = event.get_group_id()
+        if isinstance(time, int):
+            await self.db.set(gid, "word_ban_time", time)
+            msg = (
+                f"本群刷屏禁言时长已设为：{time} 秒"
+                if time > 0
+                else "本群刷屏禁言已关闭"
+            )
+            await event.send(event.plain_result(msg))
+        else:
+            status = await self.db.get(gid, "word_ban_time", 0)
+            await event.send(event.plain_result(f"本群刷屏禁言时长：{status} 秒"))
 
     async def spamming_ban(self, event: AiocqhttpMessageEvent):
         """刷屏禁言"""
         group_id = event.get_group_id()
         sender_id = event.get_sender_id()
+        ban_time = await self.db.get(group_id, "spamming_ban_time", 0)
         if (
             sender_id == event.get_self_id()
-            or self.conf["spamming"]["count"] == 0
+            or ban_time <= 0
             or len(event.get_messages()) == 0
         ):
             return
-        if group_id not in self.conf["spamming"]["whitelist"]:
-            return
+
         now = time.time()
 
         last_time = self.last_banned_time[group_id][sender_id]
-        if now - last_time < self.conf["spamming"]["ban_time"]:
+        if now - last_time < ban_time:
             return
 
         timestamps = self.msg_timestamps[group_id][sender_id]
         timestamps.append(now)
-        count = self.conf["spamming"]["count"]
+        count = self.spamming_count
         if len(timestamps) >= count:
             recent = list(timestamps)[-count:]
             intervals = [recent[i + 1] - recent[i] for i in range(count - 1)]
-            if (
-                all(
-                    interval < self.conf["spamming"]["interval"]
-                    for interval in intervals
-                )
-                and self.conf["spamming"]["ban_time"]
-            ):
+            if all(interval < self.spamming_interval for interval in intervals):
                 # 提前写入禁止标记，防止并发重复禁
                 self.last_banned_time[group_id][sender_id] = now
 
@@ -103,7 +171,7 @@ class BanproHandle:
                     await event.bot.set_group_ban(
                         group_id=int(group_id),
                         user_id=int(sender_id),
-                        duration=self.conf["spamming"]["ban_time"],
+                        duration=ban_time,
                     )
                     nickname = await get_nickname(event, sender_id)
                     await event.send(
@@ -112,7 +180,6 @@ class BanproHandle:
                 except Exception:
                     logger.error(f"bot在群{group_id}权限不足，禁言失败")
                 timestamps.clear()
-
 
     async def start_vote_mute(self, event, ban_time: int | None = None):
         """
@@ -123,7 +190,9 @@ class BanproHandle:
             return
         target_id = target_ids[0]
         if not ban_time or not isinstance(ban_time, int):
-            ban_time = random.randint(*map(int, self.conf["random_ban_time"].split("~")))
+            ban_time = random.randint(
+                *map(int, self.conf["random_ban_time"].split("~"))
+            )
         group_id = event.get_group_id()
 
         if group_id in self.vote_cache:
@@ -165,7 +234,9 @@ class BanproHandle:
                         user_id=int(record["target"]),
                         duration=record["ban_time"],
                     )
-                    await event.send(event.plain_result(f"投票时间到！已禁言{nickname2}"))
+                    await event.send(
+                        event.plain_result(f"投票时间到！已禁言{nickname2}")
+                    )
                 except Exception:
                     logger.error(f"bot在群{group_id}权限不足，禁言失败")
             else:
@@ -176,7 +247,6 @@ class BanproHandle:
             del self.vote_cache[group_id]
 
         asyncio.create_task(settle_vote())
-
 
     async def vote_mute(self, event: AiocqhttpMessageEvent, agree: bool):
         """
@@ -230,5 +300,3 @@ class BanproHandle:
                 f"禁言【{nickname}】：\n赞同({agree_count}/{threshold})\n反对({disagree_count}/{threshold})"
             )
         )
-
-
