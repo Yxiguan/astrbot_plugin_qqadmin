@@ -133,6 +133,12 @@
       }
     }
   },
+  "llm_get_msg_count":{
+    "description": "取名指令获取消息的默认轮数",
+    "hint": "取名指令会爬取群聊的聊天记录进行分析，每轮爬200条消息，默认爬轮数10轮， 轮数可调",
+    "type": "int",
+    "default": 10
+  },
   "level_threshold": {
     "description": "高等级成员阈值设置",
     "hint": "群等级高于此阈值的群成员，将被判定为“高等级成员”",

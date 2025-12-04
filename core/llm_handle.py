@@ -39,7 +39,7 @@ class LLMHandle:
         return contexts
 
     async def get_msg_contexts(
-        self, event: AiocqhttpMessageEvent, target_id: str, query_rounds: int = 10
+        self, event: AiocqhttpMessageEvent, target_id: str, query_rounds: int
     ) -> list[dict]:
         """持续获取群聊历史消息直到达到要求"""
         group_id = event.get_group_id()
@@ -87,7 +87,9 @@ class LLMHandle:
         at_ids = get_ats(event)
         target_id = at_ids[0] if at_ids else event.get_sender_id()
         end_arg = event.message_str.split()[-1]
-        query_rounds = int(end_arg) if end_arg.isdigit() else 10
+        query_rounds = (
+            int(end_arg) if end_arg.isdigit() else self.conf["llm_get_msg_count"]
+        )
         raw_card = await get_nickname(event, target_id)
 
         logger.info(f"正在根据{raw_card}（{target_id}）的聊天记录生成新昵称...")
