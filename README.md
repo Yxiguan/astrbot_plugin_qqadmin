@@ -14,6 +14,8 @@ _✨ [astrbot](https://github.com/AstrBotDevs/AstrBot) QQ群管插件 ✨_
 
 </div>
 
+# V 3.2.3已上线公测，全面增强了分群管理，功能测试尚未充分，请勿用于生成环境！发现bug请提issue。
+
 ## 🤝 介绍
 
 - 本插件利用Onebot协议接口，实现了QQ群的各种管理功能，旨在帮助用户更方便地管理群聊。  
