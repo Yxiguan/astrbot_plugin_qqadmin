@@ -203,10 +203,10 @@ class QQAdminPlugin(Star):
         """禁词禁言 <秒数>, 设为 0 表示关闭禁词检测"""
         await self.banpro.handle_word_ban_time(event, time)
 
-    @filter.command("设置禁词", alias={"禁词"})
+    @filter.command("设置禁词", alias={"禁词", "违禁词"})
     @perm_required(PermLevel.ADMIN, perm_key="word_ban")
     async def handle_builtin_ban_words(self, event: AiocqhttpMessageEvent):
-        """禁词 词1 词2 ..."""
+        """禁词 +词1 -词2, 带+-则增删, 不带则覆写"""
         await self.banpro.handle_ban_words(event)
 
     @filter.command("内置禁词")
@@ -271,11 +271,12 @@ class QQAdminPlugin(Star):
     async def stop_curfew(self, event: AiocqhttpMessageEvent):
         await self.curfew.stop_curfew(event)
 
-    @filter.command("进群审核", desc="进群审核 开/关，所有进群审核功能的总开关")
+    @filter.command("进群审核")
     @perm_required(PermLevel.ADMIN, perm_key="join")
     async def handle_join_review(
         self, event: AiocqhttpMessageEvent, mode: str | bool | None = None
     ):
+        "进群审核 开/关，所有进群审核功能的总开关"
         await self.join.handle_join_review(event, mode)
 
     @filter.command("进群白词", perm_key="join")
@@ -317,7 +318,7 @@ class QQAdminPlugin(Star):
     @filter.command("进群黑名单")
     @perm_required(PermLevel.ADMIN, perm_key="join")
     async def handle_reject_ids(self, event: AiocqhttpMessageEvent):
-        "进群黑名单 <id/+id/-id>, 用正负号进行增删"
+        "进群黑名单 +QQ -QQ, 带+-则增删, 不带则覆写"
         await self.join.handle_block_ids(event)
 
     @filter.command("批准", alias={"同意进群"}, desc="批准进群申请")
@@ -330,29 +331,29 @@ class QQAdminPlugin(Star):
     async def refuse_add_group(self, event: AiocqhttpMessageEvent, extra: str = ""):
         await self.join.refuse_add_group(event, extra)
 
-    @filter.command("进群禁言", perm_key="welcome")
-    @perm_required(PermLevel.ADMIN)
+    @filter.command("进群禁言")
+    @perm_required(PermLevel.ADMIN, perm_key="welcome")
     async def handle_join_ban(
         self, event: AiocqhttpMessageEvent, time: int | None = None
     ):
         "进群禁言 <秒数>，设为 0 表示本群不启用该功能"
         await self.join.handle_join_ban(event, time)
 
-    @filter.command("进群欢迎", perm_key="welcome")
-    @perm_required(PermLevel.MEMBER)
+    @filter.command("进群欢迎")
+    @perm_required(PermLevel.MEMBER, perm_key="welcome")
     async def handle_join_welcome(self, event: AiocqhttpMessageEvent):
         await self.join.handle_join_welcome(event)
 
-    @filter.command("退群通知", perm_key="leave")
-    @perm_required(PermLevel.MEMBER)
+    @filter.command("退群通知")
+    @perm_required(PermLevel.MEMBER, perm_key="leave")
     async def handle_leave_notify(
         self, event: AiocqhttpMessageEvent, mode: str | bool | None = None
     ):
         """退群通知 开/关"""
         await self.join.handle_leave_notify(event, mode)
 
-    @filter.command("退群拉黑", perm_key="leave")
-    @perm_required(PermLevel.ADMIN)
+    @filter.command("退群拉黑")
+    @perm_required(PermLevel.ADMIN, perm_key="leave")
     async def handle_leave_block(
         self, event: AiocqhttpMessageEvent, mode: str | bool | None = None
     ):
@@ -370,7 +371,7 @@ class QQAdminPlugin(Star):
     async def get_group_member_list(self, event: AiocqhttpMessageEvent):
         await self.member.get_group_member_list(event)
 
-    @filter.command("清理群友", desc="清理群友 未发言天数 群等级")
+    @filter.command("清理群友")
     @perm_required(PermLevel.MEMBER)
     async def clear_group_member(
         self,
@@ -378,6 +379,7 @@ class QQAdminPlugin(Star):
         inactive_days: int = 30,
         under_level: int = 10,
     ):
+        "清理群友 <未发言天数> <群等级>"
         await self.member.clear_group_member(event, inactive_days, under_level)
 
     @filter.command("上传群文件", desc="上传群文件 <文件夹名/文件名 | 文件名>")
@@ -439,12 +441,16 @@ class QQAdminPlugin(Star):
             logger.error(f"禁言用户 {user_id} 失败: {e}")
             yield
 
-    @filter.command("群管配置")
+    @filter.command("群管配置", alias={"群管设置"})
     @perm_required(PermLevel.MEMBER, check_at=False)
     async def set_config(self, event: AiocqhttpMessageEvent):
-        """修改/查看本群群管配置"""
-        gid = event.get_group_id()
+        """群管配置 <参数>, 第一个参数为数字则视为群号。用来批量修改群管参数"""
         raw = event.message_str.partition(" ")[2]
+
+        # 第一个参数若为数字，则表示群号
+        start_arg = raw.partition(" ")[0]
+        gid = start_arg if start_arg.isdigit() else event.get_group_id()
+
         if raw:
             await self.db.import_cn_lines(gid, raw)
             config_str = await self.db.export_cn_lines(gid)
