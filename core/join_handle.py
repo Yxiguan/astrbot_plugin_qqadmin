@@ -163,7 +163,7 @@ class JoinHandle:
 
         if raw:
             await self.db.set(gid, "join_welcome", raw)
-            await event.send(event.plain_result(f"本群进群欢迎语已设置为：\n{raw}"))
+            await event.send(event.plain_result(f"本群进群欢迎语已设为：\n{raw}"))
         else:
             text = await self.db.get(gid, "join_welcome", "")
             await event.send(
@@ -175,7 +175,7 @@ class JoinHandle:
         mode = parse_bool(mode_str)
         if isinstance(mode, bool):
             await self.db.set(gid, "leave_notify", mode)
-            await event.send(event.plain_result(f"本群退群通知已设置为：{mode}"))
+            await event.send(event.plain_result(f"本群退群通知已设为：{mode}"))
         else:
             status = await self.db.get(gid, "leave_notify")
             await event.send(event.plain_result(f"本群退群通知：{status}"))
@@ -185,7 +185,7 @@ class JoinHandle:
         mode = parse_bool(mode_str)
         if isinstance(mode, bool):
             await self.db.set(gid, "leave_block", mode)
-            await event.send(event.plain_result(f"本群退群拉黑已设置为：{mode}"))
+            await event.send(event.plain_result(f"本群退群拉黑已设为：{mode}"))
         else:
             status = await self.db.get(gid, "leave_block")
             await event.send(event.plain_result(f"本群退群拉黑：{status}"))

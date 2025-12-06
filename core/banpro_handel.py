@@ -53,15 +53,49 @@ class BanproHandle:
     async def handle_ban_words(self, event: AiocqhttpMessageEvent):
         """设置/查看违禁词"""
         gid = event.get_group_id()
+        raw = event.message_str.partition(" ")[2]
 
-        # 设置违禁词
-        if words := event.message_str.partition(" ")[2].split():
-            await self.db.set(gid, "custom_ban_words", words)
-            await event.send(event.plain_result(f"本群违禁词已设为：{words}"))
-        else:
-            # 查看违禁词
+        # 1. 空指令：查看
+        if not raw:
             words = await self.db.get(gid, "custom_ban_words", [])
             await event.send(event.plain_result(f"本群违禁词：{words}"))
+            return
+
+        # 2. 纯单词列表（无 +/-）：整表覆写
+        toks = raw.split()
+        if all(not tok.startswith(("+", "-")) for tok in toks):
+            await self.db.set(gid, "custom_ban_words", toks)
+            await event.send(
+                event.plain_result(f"本群违禁词已覆写为：{' '.join(toks)}")
+            )
+            return
+
+        # 3. 增量模式：+word / -word
+        curr = set(await self.db.get(gid, "custom_ban_words", []))
+        added, removed = [], []
+
+        for tok in toks:
+            if tok.startswith("+") and len(tok) > 1:
+                w = tok[1:]
+                if w not in curr:
+                    curr.add(w)
+                    added.append(w)
+            elif tok.startswith("-") and len(tok) > 1:
+                w = tok[1:]
+                if w in curr:
+                    curr.discard(w)
+                    removed.append(w)
+
+        await self.db.set(gid, "custom_ban_words", list(curr))
+
+        reply = ["本群违禁词"]
+        if added:
+            reply.append(f"新增：{'、'.join(added)}")
+        if removed:
+            reply.append(f"移除：{'、'.join(removed)}")
+        if not added and not removed:
+            reply.append("无变动")
+        await event.send(event.plain_result("\n".join(reply)))
 
     async def handle_builtin_ban_words(
         self, event: AiocqhttpMessageEvent, mode_str: str | bool | None
@@ -80,12 +114,9 @@ class BanproHandle:
     async def on_ban_words(self, event: AiocqhttpMessageEvent):
         """检测禁词并撤回消息、禁言用户"""
         gid = event.get_group_id()
-        ban_words = await self.db.get(gid, "custom_ban_words", [])
-        if not ban_words:
-            return
 
         # 检测自定义的违禁词
-        if ban_words:
+        if ban_words:= await self.db.get(gid, "custom_ban_words", []):
             if await self.check_ban_words(event, ban_words):
                 return
 
@@ -97,7 +128,7 @@ class BanproHandle:
     async def check_ban_words(
         self, event: AiocqhttpMessageEvent, ban_words: list[str]
     ) -> bool:
-        """检测内置违禁词并撤回消息"""
+        """检测违禁词并撤回消息"""
         gid = event.get_group_id()
         for word in ban_words:
             if word in event.message_str:
