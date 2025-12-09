@@ -208,6 +208,8 @@ class JoinHandle:
         min_level = await self.db.get(gid, "join_min_level")
         if min_level > 0 and user_level is not None and user_level < min_level:
             return False, f"QQ等级过低({user_level}<{min_level})"
+        if user_level is None:
+            return False, f"开启了隐藏QQ等级,请关闭隐藏等级重新申请"
 
         if comment:
             # 提取答案部分
